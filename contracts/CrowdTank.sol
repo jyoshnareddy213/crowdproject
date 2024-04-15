@@ -18,13 +18,11 @@ contract CrowdTank {
         uint deadline;
         uint amountRaised;
         bool funded;
+        mapping(address => uint) contributions; // Mapping to store contributions for each project
     }
 
     // projectId => project details
     mapping(uint => Project) public projects;
-
-    // projectId => user => contribution amount/funding amount 
-    mapping(uint => mapping(address => uint)) public contributions;
 
     // projectId => whether the id is used or not
     mapping(uint => bool) public isIdUsed;
@@ -48,15 +46,14 @@ contract CrowdTank {
     function createProject(string memory _name, string memory _description, uint _fundingGoal, uint _durationSeconds, uint _id) external {
         require(!isIdUsed[_id], "Project Id is already used");
         isIdUsed[_id] = true;
-        projects[_id] = Project({
-            creator : msg.sender,
-            name : _name,
-            description : _description,
-            fundingGoal : _fundingGoal,
-            deadline : block.timestamp + _durationSeconds,
-            amountRaised : 0,
-            funded : false
-        });
+        projects[_id].creator = msg.sender;
+        projects[_id].name = _name;
+        projects[_id].description = _description;
+        projects[_id].fundingGoal = _fundingGoal;
+        projects[_id].deadline = block.timestamp + _durationSeconds;
+        projects[_id].amountRaised = 0;
+        projects[_id].funded = false;
+
         emit ProjectCreated(_id, msg.sender, _name, _description, _fundingGoal, block.timestamp + _durationSeconds);
         totalProjects++;
     }
@@ -76,7 +73,7 @@ contract CrowdTank {
         uint contributionAmount = msg.value - commission;
 
         project.amountRaised += contributionAmount;
-        contributions[_projectId][msg.sender] = contributionAmount;
+        project.contributions[msg.sender] += contributionAmount; // Update user contributions
         emit ProjectFunded(_projectId, msg.sender, contributionAmount);
         
         if (project.amountRaised >= project.fundingGoal) {
@@ -85,16 +82,11 @@ contract CrowdTank {
         }
     }
 
-    // Function to allow anyone to enhance the deadline
-    function enhanceDeadline(uint _projectId, uint _additionalSeconds) external {
-        projects[_projectId].deadline += _additionalSeconds;
-    }
-
     // Function to withdraw funds by the project creator
-    function userWithdrawFinds(uint _projectId) external payable {
+    function userWithdrawFunds(uint _projectId) external payable {
         Project storage project = projects[_projectId];
         require(!project.funded && project.deadline <= block.timestamp, "Funding goal is reached or deadline not passed");
-        uint fundContributed = contributions[_projectId][msg.sender];
+        uint fundContributed = project.contributions[msg.sender]; // Retrieve user's contribution
         payable(msg.sender).transfer(fundContributed);
         emit FundsWithdrawn(_projectId, msg.sender, fundContributed, "user");
     }
@@ -107,6 +99,13 @@ contract CrowdTank {
         require(project.deadline <= block.timestamp, "Deadline for project is not reached");
         payable(msg.sender).transfer(project.amountRaised);
         emit FundsWithdrawn(_projectId, msg.sender, project.amountRaised, "admin");
+    }
+
+    // Function to enhance deadline for a project
+    function enhanceDeadline(uint _projectId, uint _additionalSeconds) external {
+        Project storage project = projects[_projectId];
+        require(project.creator == msg.sender, "Only project creator can enhance deadline");
+        project.deadline += _additionalSeconds;
     }
 
     // Function to get remaining time for project funding deadline
@@ -127,11 +126,13 @@ contract CrowdTank {
     function getFailedProjects() external view returns(uint) {
         return totalProjects - totalFundedProjects;
     }
+
     // Function to charge a 5% commission on each funding and allow the system admin to withdraw the commission collected
     function chargeCommission() external payable {
        require(msg.value > 0, "Must send some value of ether");
        systemCommission += (msg.value * 5) / 100;
     }
+
     // Function to get the total commission collected by the system
     function commissionCollected() external view returns(uint) {
         return systemCommission;
@@ -142,5 +143,10 @@ contract CrowdTank {
         require(msg.sender == owner, "Only owner can withdraw commission");
         payable(msg.sender).transfer(systemCommission);
         systemCommission = 0;
+    }
+
+    // Function to get the total number of projects created
+    function getTotalProjects() external view returns (uint) {
+        return totalProjects;
     }
 }
