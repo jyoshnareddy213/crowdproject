@@ -2,14 +2,24 @@
 pragma solidity ^0.8.0;
 
 contract CrowdTank {
-    address public owner; // Add a state variable to store the contract owner
+    address public owner; // Contract owner
+    address public admin; // Admin address
+    mapping(address => bool) public creators; // Mapping to store creators
+    uint public systemCommission; // Total commission collected by the system
+    uint public initialBalance;
 
-    // Add a constructor to set the contract owner
-    constructor() {
-        owner = msg.sender;
+    // Modifier to check if the caller is the admin
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Only admin can perform this action");
+        _;
+    } 
+
+    // Modifier to check if the caller is the project creator
+    modifier onlyCreator(uint _projectId) {
+        require(projects[_projectId].creator == msg.sender, "Only project creator can perform this action");
+        _;
     }
 
-    // struct to store project details
     struct Project {
         address creator;
         string name;
@@ -18,34 +28,37 @@ contract CrowdTank {
         uint deadline;
         uint amountRaised;
         bool funded;
-        mapping(address => uint) contributions; // Mapping to store contributions for each project
+        address highestFunder;
+        mapping(address => uint) contributions;
     }
 
-    // projectId => project details
     mapping(uint => Project) public projects;
-
-    // projectId => whether the id is used or not
     mapping(uint => bool) public isIdUsed;
-
-    // Total number of projects created
     uint public totalProjects;
-
-    // Total number of funded projects
     uint public totalFundedProjects;
+    uint public totalFailedProjects;
 
-    // Total commission collected by the system
-    uint public systemCommission;
-
-    // events
     event ProjectCreated(uint indexed projectId, address indexed creator, string name, string description, uint fundingGoal, uint deadline);
     event ProjectFunded(uint indexed projectId, address indexed contributor, uint amount);
     event FundsWithdrawn(uint indexed projectId, address indexed withdrawer, uint amount, string withdrawerType);
-    // withdrawerType = "user" ,= "admin"
+    event CreatorAdded(address indexed creator);
+    event CreatorRemoved(address indexed creator);
+    event DeadlineEnhanced(uint indexed projectId, uint additionalSeconds);
+    event FundingSuccessful(uint indexed projectId);
+    event FundingFailed(uint indexed projectId);
+    event ContractBalanceIncreased(address indexed sender, uint amount); // Event to log the increase in contract balance
 
-    // create project by a creator
+    constructor() payable {
+        owner = msg.sender;
+        admin = msg.sender;
+        initialBalance = msg.value;
+    }
+
+    // Function to create a new project
     function createProject(string memory _name, string memory _description, uint _fundingGoal, uint _durationSeconds, uint _id) external {
         require(!isIdUsed[_id], "Project Id is already used");
         isIdUsed[_id] = true;
+        require(creators[msg.sender], "Only added creators can create a project");
         projects[_id].creator = msg.sender;
         projects[_id].name = _name;
         projects[_id].description = _description;
@@ -58,58 +71,91 @@ contract CrowdTank {
         totalProjects++;
     }
 
+    // Function to set contributions manually for testing purposes
+    function setContribution(uint _projectId, address _backer, uint _amount) external onlyCreator(_projectId) {
+        projects[_projectId].contributions[_backer] = _amount;
+    }
+
     // Function to fund a project
     function fundProject(uint _projectId) external payable {
         Project storage project = projects[_projectId];
-        require(block.timestamp <= project.deadline, "Project deadline is already passed");
         require(!project.funded, "Project is already funded");
         require(msg.value > 0, "Must send some value of ether");
+        require(project.deadline > block.timestamp, "Project deadline has passed");
+        require(project.contributions[msg.sender] > 0, "Only backers can fund the project");
 
         // Calculate commission
-        uint commission = (msg.value * 5) / 100;
+        uint256 commission = (msg.value * 5) / 100; // 5% commission
+        uint256 contributionAmount = msg.value - commission;
+
+        // Add commission to system commission
         systemCommission += commission;
 
-        // Deduct commission from the contributed amount
-        uint contributionAmount = msg.value - commission;
-
+        // Update amountRaised for the project
         project.amountRaised += contributionAmount;
-        project.contributions[msg.sender] += contributionAmount; // Update user contributions
         emit ProjectFunded(_projectId, msg.sender, contributionAmount);
-        
+
+        // Check if funding goal is reached
         if (project.amountRaised >= project.fundingGoal) {
             project.funded = true;
             totalFundedProjects++;
+            emit FundingSuccessful(_projectId);
+        }
+
+        // Update highest funder if applicable
+        if (project.contributions[msg.sender] > project.contributions[project.highestFunder]) {
+            project.highestFunder = msg.sender;
         }
     }
 
-    // Function to withdraw funds by the project creator
-    function userWithdrawFunds(uint _projectId) external payable {
+    // Function for backers to withdraw their funds if the project is not funded and the deadline has passed
+    function userWithdrawFunds(uint _projectId) external {
         Project storage project = projects[_projectId];
-        require(!project.funded && project.deadline <= block.timestamp, "Funding goal is reached or deadline not passed");
-        uint fundContributed = project.contributions[msg.sender]; // Retrieve user's contribution
+        require(!project.funded, "Project is already funded");
+        require(project.deadline <= block.timestamp, "Project deadline has not passed yet");
+        uint fundContributed = project.contributions[msg.sender];
+        require(fundContributed > 0, "You have not contributed to this project");
+
+        // Ensure that the contract has enough balance to cover the withdrawal
+        require(address(this).balance >= fundContributed, "Contract balance is insufficient");
+
+        // Transfer the funds to the user
+        project.contributions[msg.sender] = 0; // Clear the user's contribution
         payable(msg.sender).transfer(fundContributed);
+
         emit FundsWithdrawn(_projectId, msg.sender, fundContributed, "user");
     }
 
-    // Function to withdraw funds by the admin
-    function adminWithdrawFunds(uint _projectId) external payable {
+    // Function for the admin to withdraw the raised funds for a project after it has been successfully funded
+    function adminWithdrawFunds(uint _projectId) external onlyAdmin {
         Project storage project = projects[_projectId];
         require(project.funded, "Project is not funded yet");
-        require(project.creator == msg.sender, "Only project admin can withdraw");
-        require(project.deadline <= block.timestamp, "Deadline for project is not reached");
-        payable(msg.sender).transfer(project.amountRaised);
-        emit FundsWithdrawn(_projectId, msg.sender, project.amountRaised, "admin");
+        uint raisedFunds = project.amountRaised;
+        payable(admin).transfer(raisedFunds);
+        emit FundsWithdrawn(_projectId, admin, raisedFunds, "admin");
+        project.amountRaised = 0; // Clear the project's raised funds
     }
 
-    // Function to enhance deadline for a project
-    function enhanceDeadline(uint _projectId, uint _additionalSeconds) external {
-        Project storage project = projects[_projectId];
-        require(project.creator == msg.sender, "Only project creator can enhance deadline");
-        project.deadline += _additionalSeconds;
+    // Function to add a creator by admin
+    function addCreator(address _creator) external onlyAdmin {
+        creators[_creator] = true;
+        emit CreatorAdded(_creator);
     }
 
-    // Function to get remaining time for project funding deadline
-    function getRemainingTime(uint _projectId) external view returns(uint) {
+    // Function to remove a creator by admin
+    function removeCreator(address _creator) external onlyAdmin {
+        creators[_creator] = false;
+        emit CreatorRemoved(_creator);
+    }
+
+    // Function to enhance deadline by project creator
+    function enhanceDeadline(uint _projectId, uint _additionalSeconds) external onlyCreator(_projectId) {
+        projects[_projectId].deadline += _additionalSeconds;
+        emit DeadlineEnhanced(_projectId, _additionalSeconds);
+    }
+
+    // Function to get remaining time for funding deadline
+    function getRemainingTime(uint _projectId) external view returns (uint) {
         if (block.timestamp > projects[_projectId].deadline) {
             return 0;
         } else {
@@ -117,36 +163,48 @@ contract CrowdTank {
         }
     }
 
-    // Function to get the total number of successful projects
-    function getSuccessfulProjects() external view returns(uint) {
+    // Function to get count of successful projects
+    function getSuccessfulProjectsCount() external view returns (uint) {
         return totalFundedProjects;
     }
 
-    // Function to get the total number of failed projects
-    function getFailedProjects() external view returns(uint) {
+    // Function to get count of failed projects
+    function getFailedProjectsCount() external view returns (uint) {
         return totalProjects - totalFundedProjects;
     }
 
-    // Function to charge a 5% commission on each funding and allow the system admin to withdraw the commission collected
-    function chargeCommission() external payable {
-       require(msg.value > 0, "Must send some value of ether");
-       systemCommission += (msg.value * 5) / 100;
-    }
-
-    // Function to get the total commission collected by the system
-    function commissionCollected() external view returns(uint) {
+    // Function to get total system commission
+    function getTotalSystemCommission() external view returns (uint) {
         return systemCommission;
     }
 
-    // Function to allow the system admin to withdraw the commission collected
-    function withdrawCommission() external {
-        require(msg.sender == owner, "Only owner can withdraw commission");
-        payable(msg.sender).transfer(systemCommission);
+    // Function for admin to withdraw system commission
+    function withdrawCommission() external onlyAdmin {
+        payable(admin).transfer(systemCommission);
         systemCommission = 0;
     }
 
-    // Function to get the total number of projects created
-    function getTotalProjects() external view returns (uint) {
-        return totalProjects;
+    // Function to check the current balance of the contract
+    function getContractBalance() external view returns (uint) {
+        return address(this).balance;
+    }
+
+    // Function to check the initial balance of the contract
+    function getInitialBalance() external view returns (uint) {
+        return initialBalance;
+    }
+
+    // Function to increase the contract balance
+    function increaseContractBalance() external payable onlyAdmin {
+        // Ensure that Ether is sent along with the transaction
+        require(msg.value > 0, "No Ether sent with the transaction");
+
+        // Log the increase in contract balance
+        emit ContractBalanceIncreased(msg.sender, msg.value);
+    }
+    
+    // Function to get the address of the highest funder for a project
+    function getHighestFunder(uint _projectId) external view returns (address) {
+        return projects[_projectId].highestFunder;
     }
 }
