@@ -36,6 +36,7 @@ contract CrowdTank {
     mapping(uint => bool) public isIdUsed;
     uint public totalProjects;
     uint public totalFundedProjects;
+    // Review info: variable not used
     uint public totalFailedProjects;
 
     event ProjectCreated(uint indexed projectId, address indexed creator, string name, string description, uint fundingGoal, uint deadline);
@@ -55,6 +56,8 @@ contract CrowdTank {
     }
 
     // Function to create a new project
+
+    // Review info: onlyCreator modifier not used here,it is mentioned to use that in tasks list
     function createProject(string memory _name, string memory _description, uint _fundingGoal, uint _durationSeconds, uint _id) external {
         require(!isIdUsed[_id], "Project Id is already used");
         isIdUsed[_id] = true;
@@ -72,6 +75,7 @@ contract CrowdTank {
     }
 
     // Function to set contributions manually for testing purposes
+    // Review info: this function is not required 
     function setContribution(uint _projectId, address _backer, uint _amount) external onlyCreator(_projectId) {
         projects[_projectId].contributions[_backer] = _amount;
     }
@@ -82,6 +86,8 @@ contract CrowdTank {
         require(!project.funded, "Project is already funded");
         require(msg.value > 0, "Must send some value of ether");
         require(project.deadline > block.timestamp, "Project deadline has passed");
+
+        // Review Info: not necessary feature
         require(project.contributions[msg.sender] > 0, "Only backers can fund the project");
 
         // Calculate commission
@@ -195,6 +201,7 @@ contract CrowdTank {
     }
 
     // Function to increase the contract balance
+    // Review Info:not required
     function increaseContractBalance() external payable onlyAdmin {
         // Ensure that Ether is sent along with the transaction
         require(msg.value > 0, "No Ether sent with the transaction");
@@ -208,3 +215,4 @@ contract CrowdTank {
         return projects[_projectId].highestFunder;
     }
 }
+
