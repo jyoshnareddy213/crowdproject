@@ -129,6 +129,8 @@ contract CrowdTank {
         project.contributions[msg.sender] = 0; // Clear the user's contribution
         payable(msg.sender).transfer(fundContributed);
 
+        // Review info: deduct the withdrawn amount from amountRaised for project
+
         emit FundsWithdrawn(_projectId, msg.sender, fundContributed, "user");
     }
 
